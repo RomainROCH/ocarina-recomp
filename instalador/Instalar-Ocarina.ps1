@@ -234,7 +234,8 @@ function Exec([string]$exe, [string[]]$argumentos, [switch]$PodeFalhar, [string]
     $destino = if ($Saida) { "> `"$Saida`"" } else { ">> `"$LOG`"" }
     Registrar "> $exe $q"
     $psi = New-Object Diagnostics.ProcessStartInfo
-    $psi.FileName = "$env:ComSpec"
+    # ComSpec may be missing from the inherited environment: use Windows\' system directory.
+    $psi.FileName = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'cmd.exe'
     $psi.Arguments = "/d /s /c `"`"$exe`" $q $destino 2>&1`""
     $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
     if (Test-Path $script:pasta) { $psi.WorkingDirectory = $script:pasta }
