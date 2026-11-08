@@ -50,6 +50,7 @@
 #include "gfx.h"
 #include "host.h"
 #include "nvn_hmap.h"
+#include "vk_prewarm_compat.h"
 #include "platform/platform.h"
 #include "tex.h"
 
@@ -3543,7 +3544,7 @@ void vk_pipeline_prewarm(void) {
         rt_log("vk_pipeline: vertex output unions: %u vertex shaders, %.2f locations each; %llu pairs read %.2f each",
                VO.n, VO.n ? (double)uni / VO.n : 0.0, (unsigned long long)pairs, pairs ? (double)pair / pairs : 0.0);
     }
-    uint32_t queued = 0, dropped = 0, known = 0, deferred = 0;
+    uint32_t queued = 0, dropped = 0, known = 0, deferred = 0, unsupported_mesh = 0;
     plat_mutex_lock(&P.lock);
     K.t0 = t1;
     K.loading = 1;
@@ -3554,6 +3555,13 @@ void vk_pipeline_prewarm(void) {
         const GfxShader *vs = v ? sh[v - ids] : NULL, *fs = f ? sh[f - ids] : NULL, *ts = tq ? sh[tq - ids] : NULL;
         if (!vs || (r[i].has_fs && !fs) || (r[i].has_ts && !ts)) {
             dropped++;
+            continue;
+        }
+        // A seed recorded on a mesh-capable GPU must not create task/mesh
+        // pipelines on a device that did not enable VK_EXT_mesh_shader.
+        if (vk_prewarm_skip_unsupported_mesh(vk_ctx()->has_mesh_shader,
+                                             gfx_shader_is_mesh(vs), ts != NULL)) {
+            unsupported_mesh++;
             continue;
         }
         if (A.on && vk_caps.amd) {
@@ -3591,8 +3599,8 @@ void vk_pipeline_prewarm(void) {
     plat_mutex_lock(&P.lock);
     while (K.left) plat_cond_wait(&done_cv, &P.lock);   // jobs a pool worker took
     rt_log("vk_pipeline: prewarm: %zu records in %s: %u pipelines built, %u failed, %u already built, %u deferred, %u dropped "
-           "(shader neither cached nor stored); shaders %.0f ms, pipelines %.0f ms on %d threads, total %.0f ms",
-           n, K.path, K.built, K.failed, known, deferred, dropped, t1 - t0, now_ms() - t1, nt, now_ms() - t0);
+           "(shader neither cached nor stored), %u unsupported mesh; shaders %.0f ms, pipelines %.0f ms on %d threads, total %.0f ms",
+           n, K.path, K.built, K.failed, known, deferred, dropped, unsupported_mesh, t1 - t0, now_ms() - t1, nt, now_ms() - t0);
     free(K.file);
     K.file = NULL;
     plat_mutex_unlock(&P.lock);
