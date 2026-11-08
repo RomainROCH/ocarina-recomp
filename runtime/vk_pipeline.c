@@ -3743,20 +3743,27 @@ static void big_cs_worker(void *arg) {
         // Kept, as lb_compute keeps its pipelines: built again on the replay thread, the driver's cache missed and the game froze for
         // the whole compile a second time (62 s after big compute shader 31, a 21-minute run).
         int built = pipe != VK_NULL_HANDLE;
+        int published = 0;
         if (pipe) {
             struct { const GfxShader *cs; uint32_t compute; } k = {cs, 1};
             uint64_t h = key_hash(&k, sizeof k);
             plat_mutex_lock(&P.lock);
             if (!pipe_find(&k, sizeof k, h)) {
-                pipe_add(&k, sizeof k, h, pipe, l, &B, VK_PIPELINE_BIND_POINT_COMPUTE, 0);
-                P.stats.compute++;
-                pipe = VK_NULL_HANDLE;
+                // An allocation failure must not claim this pipeline is ready.
+                if (pipe_add(&k, sizeof k, h, pipe, l, &B, VK_PIPELINE_BIND_POINT_COMPUTE, 0)) {
+                    P.stats.compute++;
+                    published = 1;
+                    pipe = VK_NULL_HANDLE;
+                }
+            } else {
+                published = 1; // Another worker already published this key.
             }
             plat_mutex_unlock(&P.lock);
             if (pipe) vkDestroyPipeline(P.device, pipe, NULL);
         }
         rt_log("vk_pipeline: big compute shader %d built in %.1f s%s", next, (double)(plat_now_ns() - t0) / 1e9, built ? "" : " (failed)");
-        __atomic_store_n(&big_cs[next].done, 1, __ATOMIC_RELEASE);
+        // 0 = pending; 1 = published; -1 = failed (do not retry on the replay thread).
+        __atomic_store_n(&big_cs[next].done, published ? 1 : -1, __ATOMIC_RELEASE);
         if (own) {
             if (built) cache_publish(own);
             else vkDestroyPipelineCache(P.device, own, NULL);
@@ -3772,7 +3779,7 @@ int vk_pipeline_compute_ready(const GfxShader *cs) {
     if (words < big_cs_words()) return 1;
     int n = __atomic_load_n(&big_cs_n, __ATOMIC_RELAXED);   // only the replay thread adds
     for (int i = 0; i < n; i++)
-        if (big_cs[i].cs == cs) return __atomic_load_n(&big_cs[i].done, __ATOMIC_ACQUIRE);
+        if (big_cs[i].cs == cs) return __atomic_load_n(&big_cs[i].done, __ATOMIC_ACQUIRE) > 0;
     if (n == BIG_CS_N) return 1;
     if (!big_cs_thread) big_cs_thread = plat_thread_spawn(big_cs_worker, NULL, "big compute", 0) ? 1 : -1;
     if (big_cs_thread < 0) return 1;
