@@ -14,3 +14,4 @@ jobs:
           python-version: "3.12"
       - run: python tools/check_content.py
       - run: python tests/check_content_test.py
+      - run: python tests/bc3_copy_region_guard_test.py
