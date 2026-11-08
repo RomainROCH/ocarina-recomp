@@ -14,3 +14,9 @@ jobs:
           python-version: "3.12"
       - run: python tools/check_content.py
       - run: python tests/check_content_test.py
+      - name: Check unsupported mesh prewarm policy (GCC and Clang)
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror -pedantic tests/test_vk_prewarm_mesh.c -o /tmp/vk-prewarm-gcc
+          /tmp/vk-prewarm-gcc
+          clang -std=c11 -Wall -Wextra -Werror -pedantic tests/test_vk_prewarm_mesh.c -o /tmp/vk-prewarm-clang
+          /tmp/vk-prewarm-clang
