@@ -1404,10 +1404,12 @@ static int image_texels(Tex *e, const Region *g, const NVNcopyRegion *r, uint8_t
         vmaFlushAllocation(c->vma, sa, 0, VK_WHOLE_SIZE);
         barrier(cb, ALL_RW, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
         int done = 0;
-        // A BC3 image takes whole 4x4 blocks, or a part that ends on the mip's edge; a region of a 5x5 or 6x6 footprint
-        // may end inside a block (vk_astc_record checks the start corner).
+        // A BC3 copy must start on a 4x4 block boundary. A valid ASTC block offset can
+        // be unaligned for BC3 (e.g. x=5 for ASTC 5x5). Partial end blocks are valid only
+        // at the mip edge; skip unsupported regions instead of issuing an invalid Vulkan copy.
         uint32_t mw = e->t.d.width >> g->level, mh = e->t.d.height >> g->level;
-        int bc_cut = e->f.astc_bc && (((w & 3) && (uint32_t)r->xoffset + w != (mw ? mw : 1)) ||
+        int bc_cut = e->f.astc_bc && (((uint32_t)r->xoffset & 3) || ((uint32_t)r->yoffset & 3) ||
+                                      ((w & 3) && (uint32_t)r->xoffset + w != (mw ? mw : 1)) ||
                                       ((h & 3) && (uint32_t)r->yoffset + h != (mh ? mh : 1)));
         if (agpu && !bc_cut) {   // bc_cut: nothing recorded, logged below as not decoded
             VkAstcRegion *ar = calloc((size_t)g->nz, sizeof *ar);
@@ -1421,7 +1423,7 @@ static int image_texels(Tex *e, const Region *g, const NVNcopyRegion *r, uint8_t
             free(ar);
         }
         if (!agpu && !(cbc && bc_cut)) vkCmdCopyBufferToImage(cb, sb, e->pub.image, VK_IMAGE_LAYOUT_GENERAL, (uint32_t)g->nz, rg);
-        else if (!agpu) log_limited(&n_astc, "WriteTexels of ASTC texture %#llx ends inside a BC3 block: left as it was",
+        else if (!agpu) log_limited(&n_astc, "WriteTexels of ASTC texture %#llx has an unaligned BC3 region: left as it was",
                                     (unsigned long long)e->pub.addr);
         else if (!done) log_limited(&n_astc, "WriteTexels of ASTC texture %#llx not decoded on the GPU: left as it was",
                                     (unsigned long long)e->pub.addr);
