@@ -586,7 +586,11 @@ static uint64_t n_evicted, n_evicted_bytes;
 
 void vk_texture_vram_short(uint64_t bytes) {
     if (bytes < EVICT_MIN_BYTES) bytes = EVICT_MIN_BYTES;
-    __atomic_store_n(&evict_want, bytes, __ATOMIC_RELAXED);
+    // A smaller allocation failure must not overwrite a larger pending shortage.
+    uint64_t pending = __atomic_load_n(&evict_want, __ATOMIC_RELAXED);
+    while (pending < bytes &&
+           !__atomic_compare_exchange_n(&evict_want, &pending, bytes, 0,
+                                        __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {}
 }
 
 static void sweep_short(void) {   // tex_lock held
