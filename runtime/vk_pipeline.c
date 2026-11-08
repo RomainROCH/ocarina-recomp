@@ -3116,6 +3116,7 @@ static Job *head_pick(int me, int take) {
 // a worker skips past queued large jobs to the next ordinary one. P.lock held.
 static int large_running;
 static int prewarm_big_bg;   // set while the prewarm queues its large records for the pool (vk_pipeline_prewarm)
+// P.lock protects this switch, including the fallback after a slow driver cache probe.
 static int probe_on = 1;   // OOT_PIPE_PROBE=0: large jobs compile in turn without a cache probe
 static Job *low_pick(int take) {
     static int big_workers = -1;
@@ -3126,11 +3127,13 @@ static Job *low_pick(int take) {
     // A large job not yet probed may run without a slot: only its cache probe, which takes milliseconds when the
     // pipeline is in pipeline-cache.bin, so cached ones no longer wait 15-20 minutes behind one that compiles.
     Job *j = A.low;
-    while (j && j->large && j->probed && large_running >= big_workers) j = j->next;
+    while (j && j->large && (j->probed || !probe_on) && large_running >= big_workers) j = j->next;
     if (j && j->large && j->probed && j->prebuild && !j->demanded)   // a slot goes to a draw's job first
         for (Job *q = j->next; q; q = q->next)
             if (q->large && (!q->prebuild || q->demanded)) { j = q; break; }
     if (j && take) {
+        // Once probes are disabled, old queued jobs must reserve a compilation slot too.
+        if (j->large && !probe_on) j->probed = 1;
         if (j->prev) j->prev->next = j->next;
         else A.low = j->next;
         if (j->next) j->next->prev = j->prev;
@@ -3205,9 +3208,12 @@ static void pipe_worker(void *arg) {
             double dt = now_ms() - t0;
             rt_log("vk_pipeline: large pipeline %s in %.0f ms%s", pipe ? "found in the cache" : "not in the cache", dt,
                    pipe || j->slot ? "" : "; waits for a slot");
-            if (dt > 10000 && probe_on) {
+            if (dt > 10000) {
+                plat_mutex_lock(&P.lock);
+                int disable_now = probe_on;
                 probe_on = 0;
-                rt_log("vk_pipeline: the driver compiled during a cache probe: probes off");
+                plat_mutex_unlock(&P.lock);
+                if (disable_now) rt_log("vk_pipeline: the driver compiled during a cache probe: probes off");
             }
             if (!pipe && !j->slot) {   // back to the head of the low queue, for the next free slot
                 plat_mutex_lock(&P.lock);
